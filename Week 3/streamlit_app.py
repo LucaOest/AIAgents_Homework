@@ -1,88 +1,75 @@
 import streamlit as st
-import openai
-import os
-from dotenv import load_dotenv
-from pathlib import Path
-import PyPDF2
-from openai import OpenAI
+from llama_index.llms.ollama import Ollama
+from llama_index.core.llms import ChatMessage
 
-# Load OpenAI API key on Streamlit Cloud
-openai.api_key = os.getenv("OPENAI_API_KEY")
+# Init LLM
+llm = Ollama(model="mistral:instruct", model_provider="ollama", request_timeout=300)
 
-if not openai.api_key:
-    # Check current directory and up to two parent directories for .env
-    for path in [Path.cwd(), Path.cwd().parent, Path.cwd().parent.parent]:
-        dotenv_file = path / ".env"
-        if dotenv_file.exists():
-            load_dotenv(dotenv_file)
-            break
+# Richtwerte für späteres Nachschlagen (optional)
+richtwerte = {
+    "Energie": "2250 kcal",
+    "Eiweiß (Protein)": "60 g",
+    "Fett (gesamt)": "75 g",
+    "gesättigte Fettsäuren": "maximal 22 g",
+    "Kohlenhydrate": "275 g",
+    "Zucker": "maximal 50 g",
+    "Ballaststoffe": "30 g",
+    "Wasser": "2000 ml",
+}
 
-client = OpenAI()
+# Titel
+st.title("🥗 Ernährungs-Check mit KI")
+st.write("Gib deine täglichen Nährwerte ein und erfahre, ob sie gesund sind.")
 
-with open("./UNOClassicManualGerman.pdf", "rb") as file:
-    reader = PyPDF2.PdfReader(file)
-    text = ""
-    for page in reader.pages:
-        text += page.extract_text()
+# Chatverlauf
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
-# Basic prompt for context
-developer_prompt = f"""
-# Identity
+# Chatverlauf anzeigen
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
 
-You are a game assistant for the UNO game and answer questions from the user about rules of game.
+# User Prompt
+if user_input := st.chat_input("Was hast du heute gegessen (z. B. kcal, Zucker etc.)?"):
+    # Anzeige User-Eingabe
+    st.chat_message("user").markdown(user_input)
+    st.session_state.messages.append({"role": "user", "content": user_input})
 
-# Instructions
+    prompt = f"""
+# Frage
 
-1. Only answer based on the context of the manual.
-2. If there is no answer or not a definite answer to the question in the manual, say it so
-3. Answer always in the language of the user question
+{user_input}
 
-# Manual
-{text}
+# Identität
+
+Du bist Ernährungsberater. Gib dem Nutzer Hinweise, ob sein Essverhalten gesund, oder ungesund ist.
+
+# Anweisungen
+
+1. Antworte nur aufgrund der Dir gegebenen Richtwerte
+2. Sollte der Nutzer die angegebenen Richtwerte nicht erfüllen, so teile dies mit.
+3. Je näher der Nutzer an den genannten Richtwerten liegt, desto besser, außer bei den Werten gesättigte Fettsäuren und Zucker; dort sind die Werte besser, je niedriger sie sind.
+4. Nenne in Form einer Tabelle, welche Richtwerte nicht erfüllt wurden
+
+# Richtwerte
+Energie: 2250 kcal
+Eiweiß (Protein): 60 g
+Fett (gesamt): 75 g
+gesättigte Fettsäuren: maximal 22 g
+Kohlenhydrate: 275 g
+Zucker: maximal 50 g
+Ballaststoffe: 30 g
+Wasser: 2000 ml
 """
 
-
-def get_openai_response(messages):
+    messages = [ChatMessage(role="user", content=prompt)]
     try:
-        completion = client.chat.completions.create(
-            model="gpt-4.1-mini", messages=messages, temperature=0
-        )
-        return completion.choices[0].message.content.strip()
+        response = llm.chat(messages)
+        answer = response.message.content
     except Exception as e:
-        return f"Error: {e}"
+        answer = f"Fehler beim Modellabruf: {e}"
 
-
-# Streamlit UI
-st.title("UNO Manual Chatbot 🧠🎴")
-st.write("Ask me anything about UNO rules!")
-
-# Set a default model
-if "openai_model" not in st.session_state:
-    st.session_state["openai_model"] = "gpt-4.1-mini"
-
-# Initialize chat history
-if "messages" not in st.session_state:
-    st.session_state.messages = [{"role": "developer", "content": developer_prompt}]
-
-# Display chat messages from history on app rerun
-for message in st.session_state.messages[1:]:
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
-
-# Accept user input
-if prompt := st.chat_input("Your question:"):
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
-        st.markdown(prompt)
-
-    with st.chat_message("assistant"):
-        stream = client.chat.completions.create(
-            model=st.session_state["openai_model"],
-            messages=[
-                {"role": m["role"], "content": m["content"]}
-                for m in st.session_state.messages
-            ],
-            stream=True,
-        )
-        response = st.write_stream(stream)
-    st.session_state.messages.append({"role": "assistant", "content": response})
+    # Anzeige Antwort
+    st.chat_message("assistant").markdown(answer)
+    st.session_state.messages.append({"role": "assistant", "content": answer})
